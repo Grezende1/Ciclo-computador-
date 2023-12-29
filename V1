@@ -1,0 +1,172 @@
+#include <Arduino.h>
+#include <SPI.h>
+#include <WiFi.h>
+#include <WiFiClient.h> 
+#include <Wire.h>
+#include <PubSubClient.h>
+
+
+
+#define NUM_AMOSTRAS 5 // Numero de amostras para a media movel
+
+int32_t valores[NUM_AMOSTRAS]; // Array para armazenar as amostras
+
+int indice = 0; // Indice para rastrear a posicao atual no array
+
+// Define o pino do sensor de efeito hall
+//#define PIN_HALL 16
+
+// Define a constante para o perímetro da roda da bicicleta
+const uint32_t TEMPO_LEITURA = 1000;
+const float PERIMETRO = 2.0 * 3.14159 * 0.35;
+
+// Declara as variáveis
+uint32_t leituras = 0;
+float distancia = 0;
+float velocidade_media = 0;
+float distancia_percorrida = 0;
+uint32_t tempo_inicial = 0;
+uint32_t tempo_borda;
+float borda_media = 0;
+uint32_t last_tempo_borda;
+bool level_one = false;
+const int hallPin = 2;
+
+//definição da senha do Wi-Fi + IP do Servidor IFMG
+const char *ssid = "Gabriel";
+const char *password = "123456789";
+
+//broker online
+const char* mqtt_server = "broker.hivemq.com";
+
+//definição de variáveis
+String Link = "http://server_adress:port/validarUser";
+String LinkStatus = "http://server_adress:port/contagem/";
+String body = "";
+int timeout,counter = 0;
+bool pcd = false;
+
+//Criando objetos
+WiFiClient wifiClient;
+//HTTPClient http;
+PubSubClient  client(wifiClient);
+char* vel = 0;
+
+
+float calcularMediaMovel(int novoValor);
+void setup() 
+{
+  // Inicializa o monitor serial
+  Serial.begin(115200);
+  pinMode(hallPin, INPUT_PULLUP);
+  startWIFI();
+  startMQTT();
+  //Tela Inicial Estacioanmento
+  delay(2000);
+
+}
+
+void loop() 
+{
+  //int sensor = hallRead();
+  // Faz 5 leituras do sensor de efeito hall
+  if (digitalRead(hallPin) == LOW) 
+  {
+    if (level_one == false) 
+    {
+      tempo_borda = millis() - last_tempo_borda;
+      last_tempo_borda = millis();
+      level_one = true;
+      if (tempo_borda > 50)
+        leituras++;
+    }
+  } 
+  else 
+  {
+    level_one = false;
+  }
+  if (tempo_borda > 50)
+    borda_media = calcularMediaMovel(tempo_borda);
+  //Serial.println("Tempo Borda: " + String(tempo_borda));
+  if ((millis() - tempo_inicial) > TEMPO_LEITURA) 
+  {
+    // distancia
+    distancia = (float)leituras * PERIMETRO;
+
+    // Calcula a velocidade média
+    velocidade_media = PERIMETRO / borda_media*1000.0;
+    velocidade_media *= 3.6;  //converte para km/h
+    // Atualiza a distância percorrida
+    distancia_percorrida += distancia;
+
+    // Mostra a velocidade média, a distância percorrida e o tempo percorrido no monitor serial
+    Serial.println("Leituras: " + String(leituras));
+    Serial.println("Velocidade média: " + String(velocidade_media) + " km/h");
+    Serial.println("Distância percorrida: " + String(distancia_percorrida) + " metros");
+    Serial.println("Distancia: " + String(distancia) + " metros");
+    Serial.println("Tempo Borda: " + String(borda_media));
+    //tempo_inicial = millis();
+    //last_tempo_borda = millis();
+    leituras = 0;
+  }
+  client.loop();
+  String conteudo = "";
+  //client.publish("esp32/Velocidade", vel);
+  // char *message = velocidade_media;
+  //int length = strlen(message);
+ // boolean retained = true; 
+  client.publish("esp32/Velocidade", String(velocidade_media).c_str());
+//delay(20);
+}
+
+void startWIFI()
+{
+  //conexão com o módulo WIFI
+  WiFi.mode(WIFI_OFF);
+  delay(1000);
+  WiFi.mode(WIFI_STA);
+
+  WiFi.begin(ssid, password);
+  Serial.println("Passei aqui!");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+  }
+  Serial.println(WiFi.localIP());
+}
+
+void startMQTT()
+{
+  client.setServer(mqtt_server, 1883);
+  
+  while (!client.connected())
+  {
+    Serial.print("Conectando no broker MQTT...");
+    // Cria identificação randômica do cliente
+    String clientId = "ESP8266Client-999";
+    if(client.connect(clientId.c_str()))
+    {
+      Serial.println("connected");
+      //client.publish("Vaga01", "hello world");
+    }
+    else
+    {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+      }
+      }
+}
+
+float calcularMediaMovel(int32_t novoValor) {
+  valores[indice] = novoValor; // Armazena o novo valor na posicao atual do array
+  indice = (indice + 1) % NUM_AMOSTRAS; // Atualiza o indice para a proxima amostra
+  int32_t soma = 0;
+  for (int i = 0; i < NUM_AMOSTRAS; i++) {
+    soma += valores[i]; // Soma todos os valores no array
+  }
+  
+  float media = soma / (float)NUM_AMOSTRAS; // Calcula a média
+  return media;
+}
